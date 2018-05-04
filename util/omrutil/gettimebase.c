@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2014, 2015 IBM Corp. and others
+ * Copyright (c) 2014, 2018 IBM Corp. and others
  *
  * This program and the accompanying materials are made available under
  * the terms of the Eclipse Public License 2.0 which accompanies this
@@ -26,9 +26,17 @@
 #include "omrcomp.h"
 #include "omrutilbase.h"
 
+
+/**
+ * TODO:ARM32
+ * there is a way to access the registers for this
+ * see here: https://github.com/google/benchmark/blob/master/src/cycleclock.h
+ */
+ 
 #if defined(LINUX) && defined(OMR_ARCH_ARM)
 #include <time.h>
 #endif
+
 
 uint64_t
 getTimebase(void)
@@ -88,6 +96,10 @@ getTimebase(void)
 	if (0 == clock_gettime(CLOCK_MONOTONIC, &ts)) {
 		tsc = ((uint64_t)ts.tv_sec * J9TIME_NANOSECONDS_PER_SECOND) + (uint64_t)ts.tv_nsec;
 	}
+#elif defined(AARCH64)
+	  int64_t tsc_int;
+	  asm volatile("mrs %0, cntvct_el0" : "=r"(tsc_int));
+	  tsc = (uint64_t)tsc_int;
 #else
 #error "Unsupported platform"
 #endif
