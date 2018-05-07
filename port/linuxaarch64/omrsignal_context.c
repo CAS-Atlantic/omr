@@ -30,8 +30,8 @@
 
 #define NGPRS 32
 
-/* AArch64 Floating Point register, Reserved Space, Strucutre Magic Number */
-#define AARCH64_FLOATING_POINT_REGISTER_STRUCT_MAGIC_NUMBER 0x46508001
+/* AArch64 Signal Context Reserved Space Size */
+#define RESERVED_SPACE_SZ 4096
 
 void
 fillInUnixSignalInfo(struct OMRPortLibrary *portLibrary, void *contextInfo, struct OMRUnixSignalInfo *j9Info)
@@ -113,14 +113,19 @@ infoForSignal(struct OMRPortLibrary *portLibrary, struct OMRUnixSignalInfo *info
 void*
 walkReserveSpace(uint32_t magic_to_find, uint8_t *reserved_space)
 {
-	struct _aarch64_ctx *header = (struct _aarch64_ctx *)reserved_space;
-	
-	if(!header || 0 < header->size) {
+	if(!reserved_space) {
 		return NULL;
-	} else if(header->magic == magic_to_find) {
-		return reserved_space;
-	} else {
-		return walkReserveSpace(magic_to_find, &reserved_space[header->size]);
+	}
+	
+	int i=0;
+	while(i<RESERVED_SPACE_SZ) {
+		struct _aarch64_ctx *header = (struct _aarch64_ctx *)&reserved_space[i];
+		if(!header || 0 < header->size) {
+			return NULL;
+		} else if(header->magic == magic_to_find) {
+			return (void*)&reserved_space[i];
+		}
+		i += header->size;
 	}
 }
 
@@ -136,7 +141,7 @@ infoForFPR(struct OMRPortLibrary *portLibrary, struct OMRUnixSignalInfo *info, i
 	 
 	if ((index >= 0) && (index < NGPRS)) {
 		struct sigcontext *const context = (struct sigcontext *)&info->platformSignalInfo.context->uc_mcontext;
-		struct fpsimd_context *const fp_regs = walkReserveSpace(AARCH64_FLOATING_POINT_REGISTER_STRUCT_MAGIC_NUMBER, (uint8_t *)context->__reserved);
+		struct fpsimd_context *const fp_regs = walkReserveSpace(FPSIMD_MAGIC, (uint8_t *)context->__reserved);
 		
 		const char *n_fpr[NGPRS] = {
 			"FPR0",
