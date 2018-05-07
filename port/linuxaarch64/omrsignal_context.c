@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017, 2018 IBM Corp. and others
+ * Copyright (c) 2018, 2018 IBM Corp. and others
  *
  * This program and the accompanying materials are made available under
  * the terms of the Eclipse Public License 2.0 which accompanies this
@@ -29,6 +29,9 @@
 #include "omrsignal_context.h"
 
 #define NGPRS 32
+
+/* AArch64 Floating Point register, Reserved Space, Strucutre Magic Number */
+#define AARCH64_FLOATING_POINT_REGISTER_STRUCT_MAGIC_NUMBER 0x46508001
 
 void
 fillInUnixSignalInfo(struct OMRPortLibrary *portLibrary, void *contextInfo, struct OMRUnixSignalInfo *j9Info)
@@ -90,14 +93,7 @@ infoForSignal(struct OMRPortLibrary *portLibrary, struct OMRUnixSignalInfo *info
 			}
 		}
 		return OMRPORT_SIG_VALUE_UNDEFINED;
-	
-	/**
-	 * TODO:AARCH64
-	 * do we need fault_address? not in use with ARM32
-	 * it seems to be unaccessible from user context... as per:
-	 * https://github.com/bminor/glibc/blob/master/sysdeps/unix/sysv/linux/aarch64/sys/user.h#L19-L34
-	 */
-	 
+
 	// case OMRPORT_SIG_SIGNAL_ADDRESS:
 	// case 7:
 	// 	*name = "fault_address";
@@ -112,35 +108,8 @@ infoForSignal(struct OMRPortLibrary *portLibrary, struct OMRUnixSignalInfo *info
 
 
 /**
- * we walk the 4k reserve space to get the floating point registers since the layout differ / chip
- * 
- * TODO:AARCH64 
- * does it actually? wording is ambiguous and documentation is scarse on such.
- * in any cases this will become usefull when support for ARM64 vectors is included
- * https://github.com/bminor/glibc/blob/master/sysdeps/unix/sysv/linux/aarch64/sys/ucontext.h#L48-L64
- * https://github.com/torvalds/linux/blob/f2d285669aae656dfeafa0bf25e86bbbc5d22329/arch/arm64/include/uapi/asm/sigcontext.h#L39-L58
- * >>
- * * Allocation of __reserved[]:
- * (Note: records do not necessarily occur in the order shown here.)
- *
- *	size		description
- *
- *	0x210		fpsimd_context						FPSIMD_MAGIC	0x46508001
- *	 0x10		esr_context							ESR_MAGIC		0x45535201
- *	0x8a0		sve_context (vl <= 64) (optional)	SVE_MAGIC		0x53564501
- *	 0x20		extra_context (optional)			EXTRA_MAGIC		0x45585401
- *	 0x10		terminator (null _aarch64_ctx)
- *
- *	0x510		(reserved for future allocation)
- *
- * New records that can exceed this space need to be opt-in for userspace, so
- * that an expanded signal frame is not generated unexpectedly.  The mechanism
- * for opting in will depend on the extension that generates each new record.
- * The above table documents the maximum set and sizes of records than can be
- * generated when userspace does not opt in for any such extension.
- * <<
+ * Walk the 4k reserve space to get the floating point registers since the layout differ per-chip
  */
-	 
 void*
 walkReserveSpace(uint32_t magic_to_find, uint8_t *reserved_space)
 {
@@ -153,7 +122,6 @@ walkReserveSpace(uint32_t magic_to_find, uint8_t *reserved_space)
 	} else {
 		return walkReserveSpace(magic_to_find, &reserved_space[header->size]);
 	}
-
 }
 
 uint32_t
@@ -168,7 +136,7 @@ infoForFPR(struct OMRPortLibrary *portLibrary, struct OMRUnixSignalInfo *info, i
 	 
 	if ((index >= 0) && (index < NGPRS)) {
 		struct sigcontext *const context = (struct sigcontext *)&info->platformSignalInfo.context->uc_mcontext;
-		struct fpsimd_context *const fp_regs = walkReserveSpace(0x46508001, (uint8_t *)context->__reserved);
+		struct fpsimd_context *const fp_regs = walkReserveSpace(AARCH64_FLOATING_POINT_REGISTER_STRUCT_MAGIC_NUMBER, (uint8_t *)context->__reserved);
 		
 		const char *n_fpr[NGPRS] = {
 			"FPR0",

@@ -26,17 +26,9 @@
 #include "omrcomp.h"
 #include "omrutilbase.h"
 
-
-/**
- * TODO:ARM32
- * there is a way to access the registers for this
- * see here: https://github.com/google/benchmark/blob/master/src/cycleclock.h
- */
- 
 #if defined(LINUX) && defined(OMR_ARCH_ARM)
 #include <time.h>
 #endif
-
 
 uint64_t
 getTimebase(void)
