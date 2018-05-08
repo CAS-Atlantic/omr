@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1991, 2017 IBM Corp. and others
+ * Copyright (c) 1991, 2018 IBM Corp. and others
  *
  * This program and the accompanying materials are made available under
  * the terms of the Eclipse Public License 2.0 which accompanies this
@@ -42,10 +42,10 @@
 #if defined(AIXPPC)||defined(LINUXPPC)
 #if defined(__xlC__)
 #include <builtins.h>
-/* 
-   Bytecode for: or 27,27,27 
+/*
+   Bytecode for: or 27,27,27
    provides a hint that performance will probably be improved if shared resources dedicated
-   to the executing processor are released for use by other processors. 
+   to the executing processor are released for use by other processors.
 */
 #pragma mc_func __ppc_yield  {"7F7BDB78"}
 /*
@@ -227,7 +227,9 @@ public:
 		asm volatile("lock orq $0x0,(%%rsp)" ::: "memory");
 #elif defined(ARM) /* defined(J9HAMMER) */
 		__sync_synchronize();
-#elif defined(S390) /* defined(ARM) */
+#elif defined(AARCH64) /* defined(ARM) */
+		__sync_synchronize();
+#elif defined(S390) /* defined(AARCH64) */
 		asm volatile("bcr 15,0":::"memory");
 #else /* defined(S390) */
 		asm volatile("":::"memory");
@@ -264,7 +266,9 @@ public:
 		*/
 #elif defined(ARM) /* defined(J9X86) || defined(J9HAMMER) */
 		__sync_synchronize();
-#else /* defined(ARM) */
+#elif defined(AARCH64) /* defined(ARM) */
+		__sync_synchronize();
+#else /* defined(AARCH64) */
 		asm volatile("":::"memory");
 #endif /* defined(J9X86) || defined(J9HAMMER) */
 #elif defined(J9ZOS390)
@@ -307,7 +311,9 @@ public:
 		*/
 #elif defined(ARM) /* defined(J9HAMMER) */
 		__sync_synchronize();
-#else /* defined(ARM) */
+#elif defined(AARCH64) /* defined(ARM) */
+		__sync_synchronize();
+#else /* defined(AARCH64) */
 		asm volatile("":::"memory");
 #endif /* defined(J9X86) || defined(J9HAMMER) */
 #elif defined(J9ZOS390)
@@ -367,7 +373,7 @@ public:
 #if defined(OMRZTPF)
         cs((cs_t *)&oldValue, (cs_t *)address, (cs_t)newValue);
         return oldValue;
-#elif defined(__GNUC__) /* defined(OMRZTPF) */ 
+#elif defined(__GNUC__) /* defined(OMRZTPF) */
 		/* Assume GCC >= 4.2 */
 		return __sync_val_compare_and_swap(address, oldValue, newValue);
 #elif defined(_MSC_VER) /* defined(__GNUC__) */
