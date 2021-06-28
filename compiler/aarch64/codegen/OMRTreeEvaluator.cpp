@@ -29,6 +29,7 @@
 #include "codegen/Linkage.hpp"
 #include "codegen/Linkage_inlines.hpp"
 #include "codegen/MemoryReference.hpp"
+#include "codegen/OMRCodeGeneratorUtils.hpp"
 #include "codegen/RegisterDependency.hpp"
 #include "codegen/Relocation.hpp"
 #include "codegen/TreeEvaluator.hpp"
@@ -2772,11 +2773,305 @@ OMR::ARM64::TreeEvaluator::arraycmpEvaluator(TR::Node *node, TR::CodeGenerator *
 	return OMR::ARM64::TreeEvaluator::unImpOpEvaluator(node, cg);
 	}
 
+bool OMR::ARM64::TreeEvaluator::stopUsingCopyReg(
+		TR::Node* node,
+		TR::Register*& reg,
+		TR::CodeGenerator* cg)
+	{
+	if (node != NULL)
+		{
+		reg = cg->evaluate(node);
+		if (!cg->canClobberNodesRegister(node))
+			{
+			TR::Register *copyReg;
+			if (reg->containsInternalPointer() ||
+				 !reg->containsCollectedReference())
+				{
+				copyReg = cg->allocateRegister();
+				if (reg->containsInternalPointer())
+					{
+					copyReg->setPinningArrayPointer(reg->getPinningArrayPointer());
+					copyReg->setContainsInternalPointer();
+					}
+				}
+			else
+				copyReg = cg->allocateCollectedReferenceRegister();
+
+			generateMovInstruction(cg, node, copyReg, reg);
+			reg = copyReg;
+			return true;
+			}
+		}
+
+	return false;
+	}
+
+static void forwardArrayCopy(TR::Node *node, int64_t byteLen, TR::Register *src, TR::Register *dst, TR::CodeGenerator *cg)
+	{
+	TR::Register *regs = NULL;
+
+	//  byteLen reg
+	regs = cg->allocateRegister(TR_GPR);
+	TR::Register *reg = cg->allocateRegister(TR_VRF);
+	TR_ASSERT(byteLen <= 4096, "Maximum value of byteLen can only be 4096");
+
+	TR::DataType srcdataType = node->getChild(0)->getDataType();
+	TR::DataType dstdataType = node->getChild(1)->getDataType();
+	size_t dataSize = node->getChild(1)->getSize();
+	int32_t standingOffset = 0;
+	if(srcdataType == dstdataType)
+		{
+		for(int64_t i = 0; i < byteLen; i = i + dataSize)
+			{
+			switch (dataSize)
+				{
+				case 1:
+					standingOffset += i;
+					generateTrg1MemInstruction(cg, TR::InstOpCode::ldrsbimmx, node, regs, new (cg->trHeapMemory()) TR::MemoryReference(src, standingOffset, cg));
+					generateMemSrc1Instruction(cg, TR::InstOpCode::strbimm, node, new (cg->trHeapMemory()) TR::MemoryReference(dst, standingOffset, cg), regs);
+				case 2:
+					standingOffset += i*2;
+					generateTrg1MemInstruction(cg, TR::InstOpCode::ldrshimmx, node, regs, new (cg->trHeapMemory()) TR::MemoryReference(src, standingOffset, cg));
+					generateMemSrc1Instruction(cg, TR::InstOpCode::strhimm, node, new (cg->trHeapMemory()) TR::MemoryReference(dst, standingOffset, cg), regs);
+				case 4:
+					standingOffset += i*4;
+					generateTrg1MemInstruction(cg, TR::InstOpCode::ldrswimm, node, regs, new (cg->trHeapMemory()) TR::MemoryReference(src, standingOffset, cg));
+					generateMemSrc1Instruction(cg, TR::InstOpCode::strimmw, node, new (cg->trHeapMemory()) TR::MemoryReference(dst, standingOffset, cg), regs);
+				case 8:
+					standingOffset += i*8;
+					generateTrg1MemInstruction(cg, TR::InstOpCode::ldrimmx, node, regs, new (cg->trHeapMemory()) TR::MemoryReference(src, standingOffset, cg));
+					generateMemSrc1Instruction(cg, TR::InstOpCode::strimmx, node, new (cg->trHeapMemory()) TR::MemoryReference(dst, standingOffset, cg), regs);
+				case 16:
+					standingOffset += i*16;
+					generateTrg1MemInstruction(cg, TR::InstOpCode::vldrimmq, node, reg, new (cg->trHeapMemory()) TR::MemoryReference(src, standingOffset, cg));
+					generateMemSrc1Instruction(cg, TR::InstOpCode::vstrimmq, node, new (cg->trHeapMemory()) TR::MemoryReference(dst, standingOffset, cg), regs);
+			  default:
+					TR_ASSERT(false, "Argument type %s is not supported\n", dstdataType.toString());
+				}
+			}
+		}
+	cg->stopUsingRegister(regs);
+	return;
+	}
+
+static void backwardArrayCopy(TR::Node *node, int64_t byteLen, TR::Register *src, TR::Register *dst, TR::CodeGenerator *cg)
+	{
+	TR::Register *regs = NULL;
+
+	//  byteLen reg
+	regs = cg->allocateRegister(TR_GPR);
+	TR::Register *reg = cg->allocateRegister(TR_VRF);
+	TR_ASSERT(byteLen <= 4096, "Maximum value of byteLen can only be 4096");
+
+	TR::DataType srcdataType = node->getChild(0)->getDataType();
+	TR::DataType dstdataType = node->getChild(1)->getDataType();
+	size_t dataSize = node->getChild(1)->getSize();
+	int32_t standingOffset = 0;
+	if(srcdataType == dstdataType)
+		{
+		for(int64_t i = 0; i < byteLen; i = i + dataSize)
+			{
+			switch (dataSize)
+				{
+				case 1:
+					standingOffset += i;
+					generateTrg1MemInstruction(cg, TR::InstOpCode::ldrsbimmx, node, regs, new (cg->trHeapMemory()) TR::MemoryReference(src, -standingOffset, cg));
+					generateMemSrc1Instruction(cg, TR::InstOpCode::strbimm, node, new (cg->trHeapMemory()) TR::MemoryReference(dst, -standingOffset, cg), regs);
+				case 2:
+					standingOffset += i*2;
+					generateTrg1MemInstruction(cg, TR::InstOpCode::ldrshimmx, node, regs, new (cg->trHeapMemory()) TR::MemoryReference(src, -standingOffset, cg));
+					generateMemSrc1Instruction(cg, TR::InstOpCode::strhimm, node, new (cg->trHeapMemory()) TR::MemoryReference(dst, -standingOffset, cg), regs);
+				case 4:
+					standingOffset += i*4;
+					generateTrg1MemInstruction(cg, TR::InstOpCode::ldrswimm, node, regs, new (cg->trHeapMemory()) TR::MemoryReference(src, -standingOffset, cg));
+					generateMemSrc1Instruction(cg, TR::InstOpCode::strimmw, node, new (cg->trHeapMemory()) TR::MemoryReference(dst, -standingOffset, cg), regs);
+				case 8:
+					standingOffset += i*8;
+					generateTrg1MemInstruction(cg, TR::InstOpCode::ldrimmx, node, regs, new (cg->trHeapMemory()) TR::MemoryReference(src, -standingOffset, cg));
+					generateMemSrc1Instruction(cg, TR::InstOpCode::strimmx, node, new (cg->trHeapMemory()) TR::MemoryReference(dst, -standingOffset, cg), regs);
+				case 16:
+					standingOffset += i*16;
+					generateTrg1MemInstruction(cg, TR::InstOpCode::vldrimmq, node, reg, new (cg->trHeapMemory()) TR::MemoryReference(src, -standingOffset, cg));
+					generateMemSrc1Instruction(cg, TR::InstOpCode::vstrimmq, node, new (cg->trHeapMemory()) TR::MemoryReference(dst, -standingOffset, cg), regs);
+			  default:
+					TR_ASSERT(false, "Argument type %s is not supported\n", dstdataType.toString());
+				}
+			}
+		}
+	cg->stopUsingRegister(regs);
+	return;
+	}
+
+static void inlineArrayCopy(TR::Node *node, int64_t byteLen, TR::Register *src, TR::Register *dst, TR::CodeGenerator *cg)
+	{
+	if (byteLen == 0)
+		return;
+
+	if(node->isForwardArrayCopy())
+		{
+		forwardArrayCopy(node, byteLen, src, dst, cg);
+		}
+	else
+		{
+		backwardArrayCopy(node, byteLen, src, dst, cg);
+		}
+	return;
+	}
+
 TR::Register *
 OMR::ARM64::TreeEvaluator::arraycopyEvaluator(TR::Node *node, TR::CodeGenerator *cg)
 	{
-	// TODO:ARM64: Enable TR::TreeEvaluator::arraycopyEvaluator in compiler/aarch64/codegen/TreeEvaluatorTable.hpp when Implemented.
-	return OMR::ARM64::TreeEvaluator::unImpOpEvaluator(node, cg);
+	static bool disableArrayCopy = feGetEnv("TR_disableArrayCopyInline") ? true : false;
+	if (disableArrayCopy)
+		{
+		TR::ILOpCodes opCode = node->getOpCodeValue();
+		TR::Node::recreate(node, TR::call);
+		TR::Register *targetRegister = TR::TreeEvaluator::directCallEvaluator(node, cg);
+		TR::Node::recreate(node, opCode);
+		return targetRegister;
+		}
+
+	bool simpleCopy = (node->getNumChildren()==3);
+
+	// Evaluate for fast arrayCopy implementation. For simple arrayCopy:
+	//		child 0 ------  Source byte address;
+	//		child 1 ------  Destination byte address;
+	//		child 2 ------  Copy length in byte;
+	// Otherwise:
+	//		child 0 ------  Source array object;
+	//		child 1 ------  Destination array object;
+	//		child 2 ------  Source byte address;
+	//		child 3 ------  Destination byte address;
+	//		child 4 ------  Copy length in byte;
+
+	TR::Compilation *comp = cg->comp();
+	TR::Node				 *srcObjNode, *dstObjNode, *srcAddrNode, *dstAddrNode, *lengthNode;
+	TR::Register			*srcObjReg=NULL, *dstObjReg=NULL, *srcAddrReg, *dstAddrReg, *lengthReg;
+	bool stopUsingCopyReg1, stopUsingCopyReg2, stopUsingCopyReg3, stopUsingCopyReg4, stopUsingCopyReg5 = false;
+
+	if (simpleCopy)
+		{
+		srcObjNode = NULL;
+		dstObjNode = NULL;
+		srcAddrNode = node->getChild(0);
+		dstAddrNode = node->getChild(1);
+		lengthNode = node->getChild(2);
+		}
+	else
+		{
+		srcObjNode = node->getChild(0);
+		dstObjNode = node->getChild(1);
+		srcAddrNode = node->getChild(2);
+		dstAddrNode = node->getChild(3);
+		lengthNode = node->getChild(4);
+		}
+
+	stopUsingCopyReg1 = TR::TreeEvaluator::stopUsingCopyReg(srcObjNode, srcObjReg, cg);
+	stopUsingCopyReg2 = TR::TreeEvaluator::stopUsingCopyReg(dstObjNode, dstObjReg, cg);
+	stopUsingCopyReg3 = TR::TreeEvaluator::stopUsingCopyReg(srcAddrNode, srcAddrReg, cg);
+	stopUsingCopyReg4 = TR::TreeEvaluator::stopUsingCopyReg(dstAddrNode, dstAddrReg, cg);
+
+	// Inline forward arrayCopy with constant length, call the wrtbar if needed after the copy
+	if (simpleCopy &&
+		  node->isForwardArrayCopy() && lengthNode->getOpCode().isLoadConst())
+		{
+		int64_t len = (lengthNode->getType().isInt32() ?
+							lengthNode->getInt() : lengthNode->getLongInt());
+
+		// inlineArrayCopy is not currently capable of handling very long lengths correctly. Under some circumstances, it
+		// will generate an ldrimmx instruction with an out-of-bounds immediate, which triggers an assert in the binary
+		// encoder.
+		TR_ASSERT(len >= 0, "Length cannot be less than zero");
+		if (len >= 0)
+			{
+			if (len > 0)
+				{
+				inlineArrayCopy(node, len, srcAddrReg, dstAddrReg, cg);
+				}
+			if (!simpleCopy)
+			  {
+			  cg->decReferenceCount(srcObjNode);
+			  cg->decReferenceCount(dstObjNode);
+			  }
+			if (stopUsingCopyReg1)
+				cg->stopUsingRegister(srcObjReg);
+			if (stopUsingCopyReg2)
+				cg->stopUsingRegister(dstObjReg);
+			if (stopUsingCopyReg3)
+				cg->stopUsingRegister(srcAddrReg);
+			if (stopUsingCopyReg4)
+				cg->stopUsingRegister(dstAddrReg);
+			cg->decReferenceCount(srcAddrNode);
+			cg->decReferenceCount(dstAddrNode);
+			cg->decReferenceCount(lengthNode);
+			return NULL;
+			}
+		}
+
+	lengthReg = cg->evaluate(lengthNode);
+	if (!cg->canClobberNodesRegister(lengthNode))
+		{
+		TR::Register *lenCopyReg = cg->allocateRegister();
+		generateTrg1Src1Instruction(cg, TR::InstOpCode::ldrimmx, lengthNode, lenCopyReg, lengthReg);
+		lengthReg = lenCopyReg;
+		stopUsingCopyReg5 = true;
+		}
+
+	TR::RegisterDependencyConditions *conditions;
+	int32_t numDeps = 7;
+
+	conditions = new (cg->trHeapMemory()) TR::RegisterDependencyConditions(numDeps, numDeps, cg->trMemory());
+
+	TR::Register *tmp1Reg = cg->allocateRegister(TR_GPR);
+	TR::Register *tmp2Reg = cg->allocateRegister(TR_GPR);
+	TR::Register *tmp3Reg = cg->allocateRegister(TR_GPR);
+	TR::Register *tmp4Reg = cg->allocateRegister(TR_GPR);
+
+	// Build up the dependency conditions
+	TR::addDependency(conditions, lengthReg, TR::RealRegister::x0, TR_GPR, cg);
+	TR::addDependency(conditions, srcAddrReg, TR::RealRegister::x1, TR_GPR, cg);
+	TR::addDependency(conditions, dstAddrReg, TR::RealRegister::x2, TR_GPR, cg);
+	TR::addDependency(conditions, tmp4Reg, TR::RealRegister::x3, TR_GPR, cg);
+	TR::addDependency(conditions, tmp3Reg, TR::RealRegister::x4, TR_GPR, cg);
+	TR::addDependency(conditions, tmp1Reg, TR::RealRegister::x5, TR_GPR, cg);
+	TR::addDependency(conditions, tmp2Reg, TR::RealRegister::x6, TR_GPR, cg);
+
+	TR::SymbolReference *arrayCopyHelper = cg->symRefTab()->findOrCreateRuntimeHelper(TR_ARM64arrayCopy, false, false, false);
+
+	generateImmSymInstruction(cg, TR::InstOpCode::bl, node,
+						(uintptr_t)arrayCopyHelper->getMethodAddress(),
+						conditions, arrayCopyHelper, NULL);
+	conditions->stopUsingDepRegs(cg);
+
+	if (srcObjNode != NULL)
+		cg->decReferenceCount(srcObjNode);
+	if (dstObjNode != NULL)
+		cg->decReferenceCount(dstObjNode);
+	cg->decReferenceCount(srcAddrNode);
+	cg->decReferenceCount(dstAddrNode);
+	cg->decReferenceCount(lengthNode);
+	if (stopUsingCopyReg1)
+		cg->stopUsingRegister(srcObjReg);
+	if (stopUsingCopyReg2)
+		cg->stopUsingRegister(dstObjReg);
+	if (stopUsingCopyReg3)
+		cg->stopUsingRegister(srcAddrReg);
+	if (stopUsingCopyReg4)
+		cg->stopUsingRegister(dstAddrReg);
+	if (stopUsingCopyReg5)
+		cg->stopUsingRegister(lengthReg);
+	if (tmp1Reg)
+		cg->stopUsingRegister(tmp1Reg);
+	if (tmp2Reg)
+		cg->stopUsingRegister(tmp2Reg);
+	if (tmp3Reg)
+		cg->stopUsingRegister(tmp3Reg);
+	if (tmp4Reg)
+		cg->stopUsingRegister(tmp4Reg);
+
+	cg->machine()->setLinkRegisterKilled(true);
+
+	return NULL;
 	}
 
 TR::Register *

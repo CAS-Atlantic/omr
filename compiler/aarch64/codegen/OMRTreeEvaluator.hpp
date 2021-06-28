@@ -662,6 +662,7 @@ public:
 
    static TR::Instruction *generateVFTMaskInstruction(TR::CodeGenerator *cg, TR::Node *node, TR::Register *dstReg, TR::Register *srcReg, TR::Instruction *preced=NULL);
    static TR::Instruction *generateVFTMaskInstruction(TR::CodeGenerator *cg, TR::Node *node, TR::Register *reg, TR::Instruction *preced=NULL);
+   static bool stopUsingCopyReg(TR::Node* node, TR::Register*& reg, TR::CodeGenerator* cg);
    };
 
 } // ARM64
